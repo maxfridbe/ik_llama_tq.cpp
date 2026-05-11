@@ -8,6 +8,15 @@
 
 #pragma once
 
+// Compatibility shims for logging macros (ik_llama.cpp uses different logging)
+#ifndef GGML_LOG_INFO
+#  define GGML_LOG_INFO(fmt, ...)  fprintf(stderr, fmt, ##__VA_ARGS__)
+#endif
+#ifndef GGML_LOG_WARN
+#  define GGML_LOG_WARN(fmt, ...)  fprintf(stderr, "WARN: " fmt, ##__VA_ARGS__)
+#endif
+
+
 #include "common.cuh"
 #include "turbo-innerq.cuh"
 #include <cstdlib>
