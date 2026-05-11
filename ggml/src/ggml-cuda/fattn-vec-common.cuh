@@ -1,3 +1,4 @@
+#include "turbo-quant.cuh"
 //
 // Copyright (C) 2023-2024 The ggml authors
 // Copyright (C) 2024 Iwan Kawrakow
