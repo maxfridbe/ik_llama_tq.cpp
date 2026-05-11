@@ -490,7 +490,7 @@ extern "C" {
         GGML_TYPE_TURBO4_0 = 44, // TurboQuant 4-bit KV cache
         GGML_TYPE_TQ3_1S   = 45, // TurboQuant 3-bit weight
         GGML_TYPE_TQ4_1S   = 46, // TurboQuant 4-bit weight
-        GGML_TYPE_COUNT,
+        GGML_TYPE_COUNT    = 400, // explicit — must stay >= all type enum values
     };
 
     // precision
