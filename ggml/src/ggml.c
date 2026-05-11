@@ -1050,6 +1050,11 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .row_meta_size            = 0,
     },
     [GGML_TYPE_Q8_K_R8] = {
+    [GGML_TYPE_TURBO2_0] = { .type_name = "TURBO2_0", .blck_size = 32, .type_size = 18, .is_quantized = true, .to_float = NULL, .from_float = NULL, .from_float_ref = NULL, .vec_dot = NULL, .vec_dot_type = GGML_TYPE_F16, .nrows = 1 },
+    [GGML_TYPE_TURBO3_0] = { .type_name = "TURBO3_0", .blck_size = 32, .type_size = 20, .is_quantized = true, .to_float = NULL, .from_float = NULL, .from_float_ref = NULL, .vec_dot = NULL, .vec_dot_type = GGML_TYPE_F16, .nrows = 1 },
+    [GGML_TYPE_TURBO4_0] = { .type_name = "TURBO4_0", .blck_size = 32, .type_size = 24, .is_quantized = true, .to_float = NULL, .from_float = NULL, .from_float_ref = NULL, .vec_dot = NULL, .vec_dot_type = GGML_TYPE_F16, .nrows = 1 },
+    [GGML_TYPE_TQ3_1S]   = { .type_name = "TQ3_1S",   .blck_size = 32, .type_size = 20, .is_quantized = true, .to_float = NULL, .from_float = NULL, .from_float_ref = NULL, .vec_dot = NULL, .vec_dot_type = GGML_TYPE_F16, .nrows = 1 },
+    [GGML_TYPE_TQ4_1S]   = { .type_name = "TQ4_1S",   .blck_size = 32, .type_size = 24, .is_quantized = true, .to_float = NULL, .from_float = NULL, .from_float_ref = NULL, .vec_dot = NULL, .vec_dot_type = GGML_TYPE_F16, .nrows = 1 },
         .type_name                = "q8_k_r8",
         .blck_size                = QK_K,
         .type_size                = sizeof(block_q8_k_r8)/8,

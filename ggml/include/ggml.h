@@ -484,6 +484,12 @@ extern "C" {
         GGML_TYPE_Q8_K_R16  = 397,
         GGML_TYPE_Q8_KV_R8  = 398,
         GGML_TYPE_Q8_K_R8   = 399,
+
+        GGML_TYPE_TURBO2_0 = 42, // TurboQuant 2-bit KV cache
+        GGML_TYPE_TURBO3_0 = 43, // TurboQuant 3-bit KV cache
+        GGML_TYPE_TURBO4_0 = 44, // TurboQuant 4-bit KV cache
+        GGML_TYPE_TQ3_1S   = 45, // TurboQuant 3-bit weight
+        GGML_TYPE_TQ4_1S   = 46, // TurboQuant 4-bit weight
         GGML_TYPE_COUNT,
     };
 
@@ -700,6 +706,8 @@ extern "C" {
         GGML_OP_FAKE_CPY,
         GGML_OP_FUSED_NORM,
         GGML_OP_FUSED_RMS_RMS_ADD,
+
+        GGML_OP_TURBO_WHT,
 
         GGML_OP_COUNT,
     };
