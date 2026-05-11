@@ -539,7 +539,7 @@ void ggml_cuda_mul_mat_tq4_1s_cublas(ggml_backend_cuda_context & ctx,
     {
         const to_fp16_cuda_t to_fp16 = ggml_get_to_fp16_cuda(GGML_TYPE_TQ4_1S);
         GGML_ASSERT(to_fp16 != nullptr);
-        to_fp16((const char *)src0->data, src0_f16.get(), n_elements, stream);
+        to_fp16((const char *)src0->data, src0_f16.get(), ne01, ne00, stream);
     }
 
     // Step 2: src1 f32 → fp16
@@ -547,7 +547,7 @@ void ggml_cuda_mul_mat_tq4_1s_cublas(ggml_backend_cuda_context & ctx,
     {
         const to_fp16_cuda_t to_fp16 = ggml_get_to_fp16_cuda(GGML_TYPE_F32);
         GGML_ASSERT(to_fp16 != nullptr);
-        to_fp16((const char *)src1->data, src1_f16.get(), ne10 * ne11, stream);
+        to_fp16((const char *)src1->data, src1_f16.get(), ne11, ne10, stream);
     }
 
     // Step 3: cuBLAS fp16 GEMM with fp32 compute (tensor cores)
