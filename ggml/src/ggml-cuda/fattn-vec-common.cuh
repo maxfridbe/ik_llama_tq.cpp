@@ -596,6 +596,115 @@ static __device__ __forceinline__ T dequantize_1_f16(const void * __restrict__ v
     return x[i];
 }
 
+
+// ── TurboQuant KV cache: K scoring and V dequantization ──────────────────────
+
+template <typename T, int Dk>
+static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_turbo3(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v,
+    const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+    const block_turbo3_0 * K_t = (const block_turbo3_0 *) K_c;
+    GGML_UNUSED(Q_q8); GGML_UNUSED(Q_ds_v);
+    const float2 * Q_f2 = (const float2 *) Q_v;
+    float sum = 0.0f;
+    // Each WARP_SIZE threads cover Dk/2 float2 slots; we iterate in groups of WARP_SIZE
+    for (int k_KQ_0 = 0; k_KQ_0 < Dk/2; k_KQ_0 += WARP_SIZE) {
+        const int k_KQ = k_KQ_0 + threadIdx.x;
+        const float2 q = Q_f2[k_KQ_0/WARP_SIZE];
+        const int d0 = 2*k_KQ;
+        const int ib  = d0 / QK_TURBO3;
+        const int jj  = d0 % QK_TURBO3;
+        const float norm = __half2float(K_t[ib].norm);
+        const uint8_t qs  = K_t[ib].qs[jj/4];
+        const uint8_t sgn = K_t[ib].signs[jj/8];
+        const int s0 = jj & 7;
+        const int idx0 = ((qs>>0)&3) | (((sgn>>(s0  ))&1)<<2);
+        const int idx1 = ((qs>>2)&3) | (((sgn>>(s0+1))&1)<<2);
+        sum += (TURBO_CENTROIDS_3BIT[idx0]*q.x + TURBO_CENTROIDS_3BIT[idx1]*q.y) * norm;
+    }
+    return (T)sum;
+}
+
+template <typename T, int Dk>
+static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_turbo2(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v,
+    const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+    const block_turbo2_0 * K_t = (const block_turbo2_0 *) K_c;
+    GGML_UNUSED(Q_q8); GGML_UNUSED(Q_ds_v);
+    const float2 * Q_f2 = (const float2 *) Q_v;
+    float sum = 0.0f;
+    for (int k_KQ_0 = 0; k_KQ_0 < Dk/2; k_KQ_0 += WARP_SIZE) {
+        const int k_KQ = k_KQ_0 + threadIdx.x;
+        const float2 q = Q_f2[k_KQ_0/WARP_SIZE];
+        const int d0 = 2*k_KQ;
+        const int ib = d0 / QK_TURBO2;
+        const int jj = d0 % QK_TURBO2;
+        const float norm = __half2float(K_t[ib].norm);
+        const uint8_t qs = K_t[ib].qs[jj/4];
+        const int idx0 = (qs>>0)&3;
+        const int idx1 = (qs>>2)&3;
+        sum += (TURBO_CENTROIDS_2BIT[idx0]*q.x + TURBO_CENTROIDS_2BIT[idx1]*q.y) * norm;
+    }
+    return (T)sum;
+}
+
+template <typename T, int Dk>
+static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_turbo4(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v,
+    const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+    const block_turbo4_0 * K_t = (const block_turbo4_0 *) K_c;
+    GGML_UNUSED(Q_q8); GGML_UNUSED(Q_ds_v);
+    const float2 * Q_f2 = (const float2 *) Q_v;
+    float sum = 0.0f;
+    for (int k_KQ_0 = 0; k_KQ_0 < Dk/2; k_KQ_0 += WARP_SIZE) {
+        const int k_KQ = k_KQ_0 + threadIdx.x;
+        const float2 q = Q_f2[k_KQ_0/WARP_SIZE];
+        const int d0 = 2*k_KQ;
+        const int ib = d0 / QK_TURBO4;
+        const int jj = d0 % QK_TURBO4;
+        const float norm = __half2float(K_t[ib].norm);
+        const uint8_t nb = K_t[ib].qs[jj/2];
+        const int idx0 = (nb>>0)&0xF;
+        const int idx1 = (nb>>4)&0xF;
+        sum += (TURBO_CENTROIDS_4BIT[idx0]*q.x + TURBO_CENTROIDS_4BIT[idx1]*q.y) * norm;
+    }
+    return (T)sum;
+}
+
+template <typename T>
+static __device__ __forceinline__ T dequantize_1_turbo3(const void * __restrict__ vx, const int64_t i) {
+    const block_turbo3_0 * x = (const block_turbo3_0 *) vx;
+    const int64_t ib = i / QK_TURBO3;
+    const int64_t j  = i % QK_TURBO3;
+    const float norm = __half2float(x[ib].norm);
+    const uint8_t qs  = x[ib].qs[j/4];
+    const uint8_t sgn = x[ib].signs[j/8];
+    const int idx = ((qs>>(2*(j%4)))&3) | (((sgn>>(j%8))&1)<<2);
+    return (T)(TURBO_CENTROIDS_3BIT[idx] * norm);
+}
+
+template <typename T>
+static __device__ __forceinline__ T dequantize_1_turbo2(const void * __restrict__ vx, const int64_t i) {
+    const block_turbo2_0 * x = (const block_turbo2_0 *) vx;
+    const int64_t ib = i / QK_TURBO2;
+    const int64_t j  = i % QK_TURBO2;
+    const float norm = __half2float(x[ib].norm);
+    const uint8_t qs = x[ib].qs[j/4];
+    const int idx = (qs>>(2*(j%4)))&3;
+    return (T)(TURBO_CENTROIDS_2BIT[idx] * norm);
+}
+
+template <typename T>
+static __device__ __forceinline__ T dequantize_1_turbo4(const void * __restrict__ vx, const int64_t i) {
+    const block_turbo4_0 * x = (const block_turbo4_0 *) vx;
+    const int64_t ib = i / QK_TURBO4;
+    const int64_t j  = i % QK_TURBO4;
+    const float norm = __half2float(x[ib].norm);
+    const uint8_t nb = x[ib].qs[j/2];
+    const int idx = (j%2 == 0) ? (nb&0xF) : (nb>>4);
+    return (T)(TURBO_CENTROIDS_4BIT[idx] * norm);
+}
+
 template <int Dk>
 constexpr __device__ vec_dot_KQ_f16_t get_vec_dot_KQ_f16(ggml_type type_K) {
     return type_K == GGML_TYPE_Q4_0   ? vec_dot_fattn_vec_KQ_q4_0<half, Dk>   :
@@ -605,7 +714,10 @@ constexpr __device__ vec_dot_KQ_f16_t get_vec_dot_KQ_f16(ggml_type type_K) {
            type_K == GGML_TYPE_Q5_1   ? vec_dot_fattn_vec_KQ_q5_1<half, Dk>   :
            type_K == GGML_TYPE_Q6_0   ? vec_dot_fattn_vec_KQ_q6_0<half, Dk>   :
            type_K == GGML_TYPE_Q8_0   ? vec_dot_fattn_vec_KQ_q8_0<half, Dk>   :
-           type_K == GGML_TYPE_F16    ? vec_dot_fattn_vec_KQ_f16<half, Dk>    :
+           type_K == GGML_TYPE_F16      ? vec_dot_fattn_vec_KQ_f16<half, Dk>    :
+           type_K == GGML_TYPE_TURBO3_0 ? vec_dot_fattn_vec_KQ_turbo3<half, Dk> :
+           type_K == GGML_TYPE_TURBO2_0 ? vec_dot_fattn_vec_KQ_turbo2<half, Dk> :
+           type_K == GGML_TYPE_TURBO4_0 ? vec_dot_fattn_vec_KQ_turbo4<half, Dk> :
            nullptr;
 }
 
@@ -618,7 +730,10 @@ constexpr __device__ vec_dot_KQ_f32_t get_vec_dot_KQ_f32(ggml_type type_K) {
            type_K == GGML_TYPE_Q5_1   ? vec_dot_fattn_vec_KQ_q5_1<float, Dk>   :
            type_K == GGML_TYPE_Q6_0   ? vec_dot_fattn_vec_KQ_q6_0<float, Dk>   :
            type_K == GGML_TYPE_Q8_0   ? vec_dot_fattn_vec_KQ_q8_0<float, Dk>   :
-           type_K == GGML_TYPE_F16    ? vec_dot_fattn_vec_KQ_f16<float, Dk>    :
+           type_K == GGML_TYPE_F16      ? vec_dot_fattn_vec_KQ_f16<float, Dk>    :
+           type_K == GGML_TYPE_TURBO3_0 ? vec_dot_fattn_vec_KQ_turbo3<float, Dk> :
+           type_K == GGML_TYPE_TURBO2_0 ? vec_dot_fattn_vec_KQ_turbo2<float, Dk> :
+           type_K == GGML_TYPE_TURBO4_0 ? vec_dot_fattn_vec_KQ_turbo4<float, Dk> :
            nullptr;
 }
 
@@ -630,7 +745,10 @@ constexpr __device__ dequantize_1_f16_t get_dequantize_1_f16(ggml_type type_V) {
            type_V == GGML_TYPE_Q6_0   ? dequantize_1_q6_0<half> :
            type_V == GGML_TYPE_Q8_0   ? dequantize_1_q8_0<half> :
            type_V == GGML_TYPE_IQ4_NL ? dequantize_1_iq4_nl<half> :
-           type_V == GGML_TYPE_F16    ? dequantize_1_f16<half> :
+           type_V == GGML_TYPE_F16      ? dequantize_1_f16<half>    :
+           type_V == GGML_TYPE_TURBO3_0 ? dequantize_1_turbo3<half> :
+           type_V == GGML_TYPE_TURBO2_0 ? dequantize_1_turbo2<half> :
+           type_V == GGML_TYPE_TURBO4_0 ? dequantize_1_turbo4<half> :
            nullptr;
 }
 
@@ -642,7 +760,10 @@ constexpr __device__ dequantize_1_f32_t get_dequantize_1_f32(ggml_type type_V) {
            type_V == GGML_TYPE_Q6_0   ? dequantize_1_q6_0<float> :
            type_V == GGML_TYPE_Q8_0   ? dequantize_1_q8_0<float> :
            type_V == GGML_TYPE_IQ4_NL ? dequantize_1_iq4_nl<float> :
-           type_V == GGML_TYPE_F16    ? dequantize_1_f16<float> :
+           type_V == GGML_TYPE_F16      ? dequantize_1_f16<float>    :
+           type_V == GGML_TYPE_TURBO3_0 ? dequantize_1_turbo3<float> :
+           type_V == GGML_TYPE_TURBO2_0 ? dequantize_1_turbo2<float> :
+           type_V == GGML_TYPE_TURBO4_0 ? dequantize_1_turbo4<float> :
            nullptr;
 }
 
