@@ -53,7 +53,7 @@ cmake --build . -j 16 --target llama-server
 ## Status
 
 - [x] Compiles with CUDA
-- [ ]  KV cache wired in attention dispatch for ik_llama.cpp's fattn kernels (next step)
+- [x] turbo2/3/4 KV cache wired into fattn-vec dispatch (K scoring + V dequant)
 - [ ] End-to-end inference test with MTP + turbo3
 
 The turbo type definitions, CUDA kernels, and template instances are all present.
