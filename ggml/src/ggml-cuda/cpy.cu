@@ -654,20 +654,28 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
                (src1->type == GGML_TYPE_TURBO3_0 || src1->type == GGML_TYPE_TURBO2_0 || src1->type == GGML_TYPE_TURBO4_0)) {
         // f16/f32 → turbo: convert to f32 first if needed, then WHT+quantize
         if (src0->type == GGML_TYPE_F16) {
-            // Allocate temp f32 buffer, convert, then quantize
+            // Convert f16→f32 then WHT+quantize to turbo
             const int64_t n_elem = ggml_nelements(src0);
             float * tmp_f32 = nullptr;
             CUDA_CHECK(cudaMallocAsync(&tmp_f32, n_elem * sizeof(float), main_stream));
-            // Convert f16→f32 using element-wise cast
-            // f16 → f32 conversion for turbo
-            ggml_cpy_flt_cuda<half, float>(src0_ddc, (char *)tmp_f32, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne00, ne01, ne02, sizeof(float), (int64_t)ne00*sizeof(float), (int64_t)ne00*ne01*sizeof(float), (int64_t)ne00*ne01*ne02*sizeof(float), main_stream, nullptr, 0);
-            // Build a temporary f32 tensor wrapper for turbo quantize
+            // Simple f16→f32 kernel (contiguous assumed for KV path)
+            const int n_blk = (int)((n_elem + 255) / 256);
+            auto cvt_k = [] __device__ (float * dst, const half * src, int64_t n) {
+                int64_t i = (int64_t)blockIdx.x * 256 + threadIdx.x;
+                if (i < n) dst[i] = __half2float(src[i]);
+            };
+            // Use kernel via template lambda workaround — just use a thrust-free approach:
+            // launch via explicit global function pointer ... actually just use cudaMemcpy2D
+            // SIMPLE: Use existing f16 to f32 in a loop on the GPU via a standard kernel.
+            // Since we cannot easily launch lambdas, use the _contiguous variant with dummy args.
+            int dummy_idx = 0;
+            ggml_cpy_flt_contiguous_cuda<half, float>(src0_ddc, (char *)tmp_f32, (int)n_elem, main_stream, nullptr, dummy_idx);
             ggml_tensor tmp_src = *src0;
             tmp_src.type = GGML_TYPE_F32;
             tmp_src.nb[0] = sizeof(float);
             tmp_src.nb[1] = ne00 * sizeof(float);
-            tmp_src.nb[2] = ne00 * ne01 * sizeof(float);
-            tmp_src.nb[3] = ne00 * ne01 * ne02 * sizeof(float);
+            tmp_src.nb[2] = (int64_t)ne00 * ne01 * sizeof(float);
+            tmp_src.nb[3] = (int64_t)ne00 * ne01 * ne02 * sizeof(float);
             tmp_src.data  = tmp_f32;
             ggml_cuda_cpy_f32_to_turbo(ctx, &tmp_src, src1);
             CUDA_CHECK(cudaFreeAsync(tmp_f32, main_stream));
