@@ -2543,6 +2543,18 @@ extern "C" {
             struct ggml_tensor  * state,
             struct ggml_tensor  * saved_steps);
 
+
+    // TurboQuant: Walsh-Hadamard Transform for KV cache rotation
+    // direction: 0 = forward (for Q), 1 = inverse (for KQV output)
+    // group_size: 0 = auto (64 or 128 from ne[0]), 32/64/128 explicit
+    // scale: NULL = no InnerQ scaling
+    GGML_API struct ggml_tensor * ggml_turbo_wht(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   direction,
+            int                   group_size,
+            struct ggml_tensor  * scale);
+
     // custom operators
 
     typedef void (*ggml_unary_op_f32_t) (const int, float *, const float *);

@@ -4643,6 +4643,11 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 if (ggml_are_same_shape(op->src[0], op->src[1]) && op->src[0]->type == GGML_TYPE_Q8_0 && op->src[1]->type == GGML_TYPE_Q8_0) {
                     return true;
                 }
+                // TurboQuant: f32/f16 → turbo2/3/4 KV cache write
+                if ((src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16) &&
+                    (src1_type == GGML_TYPE_TURBO3_0 || src1_type == GGML_TYPE_TURBO2_0 || src1_type == GGML_TYPE_TURBO4_0)) {
+                    return true;
+                }
                 return false;
             } break;
         case GGML_OP_REDUCE:

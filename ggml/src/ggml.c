@@ -24689,6 +24689,31 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
 
 ////////////////////////////////////////////////////////////////////////////////
 
+
+// ggml_turbo_wht
+struct ggml_tensor * ggml_turbo_wht(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                   direction,
+        int                   group_size,
+        struct ggml_tensor  * scale) {
+    GGML_ASSERT(ggml_is_contiguous(a));
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(direction == 0 || direction == 1);
+    if (group_size == 0) {
+        group_size = (a->ne[0] % 128 == 0) ? 128 : 64;
+    }
+    GGML_ASSERT(group_size == 32 || group_size == 64 || group_size == 128);
+    GGML_ASSERT(a->ne[0] % group_size == 0);
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, a->ne);
+    result->op = GGML_OP_TURBO_WHT;
+    result->src[0] = a;
+    result->src[1] = scale;
+    memcpy(result->op_params + 0, &direction, sizeof(int));
+    memcpy(result->op_params + sizeof(int), &group_size, sizeof(int));
+    return result;
+}
+
 struct ggml_hash_set ggml_hash_set_new(size_t size) {
     size = ggml_hash_size(size);
     struct ggml_hash_set result;

@@ -1,4 +1,8 @@
 #include "cpy.cuh"
+#include "set-rows.cuh"
+
+// Forward decl for turbo cpy (implemented in set-rows.cu)
+void ggml_cuda_cpy_f32_to_turbo(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, ggml_tensor * dst);
 #include "dequantize.cuh"
 #include "graph.cuh"
 #include "cpy-utils.cuh"
@@ -646,7 +650,33 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
     } else if (ggml_are_same_shape(src0, src1) && src0->type == GGML_TYPE_Q8_0 && src1->type == GGML_TYPE_Q8_0) {
         // This is needed for MLA with mla=2 when using q8_0 cache.
         transpose_q8_0(ctx, src0, src1);
-    } else {
+    } else if ((src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) &&
+               (src1->type == GGML_TYPE_TURBO3_0 || src1->type == GGML_TYPE_TURBO2_0 || src1->type == GGML_TYPE_TURBO4_0)) {
+        // f16/f32 → turbo: convert to f32 first if needed, then WHT+quantize
+        if (src0->type == GGML_TYPE_F16) {
+            // Allocate temp f32 buffer, convert, then quantize
+            const int64_t n_elem = ggml_nelements(src0);
+            float * tmp_f32 = nullptr;
+            CUDA_CHECK(cudaMallocAsync(&tmp_f32, n_elem * sizeof(float), main_stream));
+            // Convert f16→f32 using element-wise cast
+            ggml_cuda_cpy_flt_cuda<half, float>(src0_ddc, (char *)tmp_f32, ne, ne00, ne01, ne02,
+                nb00, nb01, nb02, nb03, ne00, ne01, ne02,
+                sizeof(float), ne00*sizeof(float), ne00*ne01*sizeof(float), ne00*ne01*ne02*sizeof(float),
+                main_stream, nullptr, 0);
+            // Build a temporary f32 tensor wrapper for turbo quantize
+            ggml_tensor tmp_src = *src0;
+            tmp_src.type = GGML_TYPE_F32;
+            tmp_src.nb[0] = sizeof(float);
+            tmp_src.nb[1] = ne00 * sizeof(float);
+            tmp_src.nb[2] = ne00 * ne01 * sizeof(float);
+            tmp_src.nb[3] = ne00 * ne01 * ne02 * sizeof(float);
+            tmp_src.data  = tmp_f32;
+            ggml_cuda_cpy_f32_to_turbo(ctx, &tmp_src, src1);
+            CUDA_CHECK(cudaFreeAsync(tmp_f32, main_stream));
+        } else {
+            ggml_cuda_cpy_f32_to_turbo(ctx, src0, src1);
+        }
+        } else {
         GGML_ABORT("%s: unsupported type combination (%s to %s)\n", __func__,
                 ggml_type_name(src0->type), ggml_type_name(src1->type));
     }
