@@ -4325,6 +4325,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "FAKE_CPY",
     "FUSED_NORM",
     "FUSED_RMS_RMS_ADD",
+    "TURBO_WHT",
 };
 
 static_assert(GGML_OP_COUNT == 103, "GGML_OP_COUNT != 103");
@@ -24669,6 +24670,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
         case GGML_OP_NONE:
             {
                 // nop
+            } break;
+        case GGML_OP_TURBO_WHT:
+            {
+                // handled by CUDA backend; CPU is a no-op
             } break;
         case GGML_OP_COUNT:
             {
