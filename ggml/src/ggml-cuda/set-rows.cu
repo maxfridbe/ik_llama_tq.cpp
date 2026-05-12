@@ -1173,18 +1173,6 @@ static void set_rows_cuda_turbo4(
     }
 }
 
-template<typename src_t, typename idx_t>
-static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    const src_t * src0_d = (const src_t *)src0->data;
-    const idx_t * src1_d = (const idx_t *)src1->data;
-
-    GGML_TENSOR_BINARY_OP_LOCALS
-
-    cudaStream_t stream = ctx.stream();
-
-
-    if (dst->type == GGML_TYPE_F32) {
-
 static __global__ void k_fill_seq_i32(int32_t * buf, int64_t n) {
     int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) buf[i] = (int32_t)i;
