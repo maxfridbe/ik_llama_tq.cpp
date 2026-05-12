@@ -576,13 +576,7 @@ void llm_build_context::llm_build_kv_store(
         ggml_tensor * k_cache_view = ggml_view_2d(ctx, kv.k_l[il], n_embd_head_k, n_tokens*n_head_kv,
                 k_row_size, k_row_size*n_head_kv*kv_head);
 
-        // TurboQuant: cast K to f32 before cpy — the CUDA set_rows_turbo kernel requires f32 input
-        const bool k_is_turbo = (kv.k_l[il]->type == GGML_TYPE_TURBO3_0 ||
-                                  kv.k_l[il]->type == GGML_TYPE_TURBO2_0 ||
-                                  kv.k_l[il]->type == GGML_TYPE_TURBO4_0);
-        ggml_tensor * k_src = k_is_turbo ? ggml_cast(ctx, k_cur, GGML_TYPE_F32) : k_cur;
-
-        lctx.cache_copies[2*il+0].cpy  = ggml_cpy(ctx, k_src, k_cache_view);
+        lctx.cache_copies[2*il+0].cpy  = ggml_cpy(ctx, k_cur, k_cache_view);
         lctx.cache_copies[2*il+0].step = k_row_size*n_head_kv;
 
         // note: storing RoPE-ed version of K in the KV cache
@@ -606,12 +600,7 @@ void llm_build_context::llm_build_kv_store(
         }
         cb(v_cache_view, "v_cache_view", il);
 
-        // TurboQuant: cast V to f32 for turbo write
-        const bool v_is_turbo = (kv.v_l[il]->type == GGML_TYPE_TURBO3_0 ||
-                                  kv.v_l[il]->type == GGML_TYPE_TURBO2_0 ||
-                                  kv.v_l[il]->type == GGML_TYPE_TURBO4_0);
-        ggml_tensor * v_src_cpy = v_is_turbo ? ggml_cast(ctx, v_cur, GGML_TYPE_F32) : v_cur;
-        lctx.cache_copies[2*il+1].cpy  = ggml_cpy(ctx, v_src_cpy, v_cache_view);
+        lctx.cache_copies[2*il+1].cpy  = ggml_cpy(ctx, v_cur, v_cache_view);
         ggml_build_forward_expand(graph, lctx.cache_copies[2*il+1].cpy);
     }
 }

@@ -1177,7 +1177,7 @@ static __global__ void k_fill_seq_i32(int32_t * buf, int64_t n) {
 }
 void ggml_cuda_cpy_f32_to_turbo(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, ggml_tensor * dst) {
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    cudaStream_t stream = ctx.stream();
+            cudaStream_t stream = ctx.stream();
     const int64_t n_rows = ggml_nrows(src0);
     int32_t * idx_buf = nullptr;
     CUDA_CHECK(cudaMallocAsync(&idx_buf, n_rows * sizeof(int32_t), stream));
