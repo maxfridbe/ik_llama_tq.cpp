@@ -24720,6 +24720,20 @@ struct ggml_tensor * ggml_turbo_wht(
 }
 
 
+// TurboQuant centroid lookup tables (CPU path)
+static const float TURBO_CENTROIDS_2BIT_CPU[4] = {
+    -0.133462f, -0.039994f, 0.039994f, 0.133462f
+};
+static const float TURBO_CENTROIDS_3BIT_CPU[8] = {
+    -0.190685f, -0.117832f, -0.065717f, -0.021460f,
+     0.021460f,  0.065717f,  0.117832f,  0.190685f
+};
+static const float TURBO_CENTROIDS_4BIT_CPU[16] = {
+    -0.173926f, -0.117195f, -0.089527f, -0.068756f,
+    -0.051262f, -0.035597f, -0.020989f, -0.006938f,
+     0.006938f,  0.020989f,  0.035597f,  0.051262f,
+     0.068756f,  0.089527f,  0.117195f,  0.173926f
+};
 // TurboQuant CPU quantize stubs — used by CPU fallback path (e.g. warmup).
 // No WHT rotation; GPU path (set_rows_cuda_turbo*) provides the proper WHT version.
 static void quantize_row_turbo3_0_cpu(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
