@@ -778,6 +778,9 @@ void* ggml_cuda_cpy_fn(const ggml_tensor * src0, ggml_tensor * src1) {
         return (void*) cpy_flt<cpy_1_flt<int32_t, float>>;
     } else if (ggml_are_same_shape(src0, src1) && src0->type == GGML_TYPE_Q8_0 && src1->type == GGML_TYPE_Q8_0) {
         return (void *)transpose_q8_0;
+    } else if ((src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) &&
+               (src1->type == GGML_TYPE_TURBO3_0 || src1->type == GGML_TYPE_TURBO2_0 || src1->type == GGML_TYPE_TURBO4_0)) {
+        return nullptr; // turbo: handled in ggml_cuda_cpy directly
     } else {
         GGML_ABORT("%s: unsupported type combination (%s to %s)\n", __func__,
                 ggml_type_name(src0->type), ggml_type_name(src1->type));
