@@ -92,13 +92,18 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         return;
     }
 
-    if (new_mma_available(cc) && K->ne[0] == 128 && V->ne[0] == 128 && Q->ne[0] == 128 && Q->ne[1] == 1 &&
+
+    // TurboQuant: MMA kernels don't support turbo-typed K/V; fall through to VEC path
+    const bool k_is_turbo = (K->type == GGML_TYPE_TURBO3_0 || K->type == GGML_TYPE_TURBO2_0 || K->type == GGML_TYPE_TURBO4_0);
+    const bool v_is_turbo = (V->type == GGML_TYPE_TURBO3_0 || V->type == GGML_TYPE_TURBO2_0 || V->type == GGML_TYPE_TURBO4_0);
+    const bool kv_is_turbo = k_is_turbo || v_is_turbo;
+    if (!kv_is_turbo && new_mma_available(cc) && K->ne[0] == 128 && V->ne[0] == 128 && Q->ne[0] == 128 && Q->ne[1] == 1 &&
             (Q->ne[2] / K->ne[2] == 12 || Q->ne[2] / K->ne[2] == 6 || Q->ne[2] / K->ne[2] == 10)) {
         ggml_cuda_flash_attn_ext_mma_new(ctx, dst);
         return;
     }
 
-    if (new_mma_available(cc) && K->ne[0] == 256 && V->ne[0] == 256 && Q->ne[0] == 256 && Q->ne[1] == 1 && Q->ne[2] / K->ne[2] == 6) {
+    if (!kv_is_turbo && new_mma_available(cc) && K->ne[0] == 256 && V->ne[0] == 256 && Q->ne[0] == 256 && Q->ne[1] == 1 && Q->ne[2] / K->ne[2] == 6) {
         ggml_cuda_flash_attn_ext_mma_new(ctx, dst);
         return;
     }
@@ -108,7 +113,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     // On my GPU (RTX-4080) MMA is efinitely faster for GQA, both for f16 and for quantized KV cache.
     //const bool mma_needs_data_conversion = K->type != GGML_TYPE_F16 || V->type != GGML_TYPE_F16;
     //const bool mma_faster_for_bs1 = new_mma_available(cc) && gqa_opt_applies && cc < CC_ADA_LOVELACE && !mma_needs_data_conversion;
-    const bool mma_faster_for_bs1 = new_mma_available(cc) && gqa_opt_applies && !(Q->ne[1] == 1 && n_swa > 0 && K->ne[0] == V->ne[0]);
+    const bool mma_faster_for_bs1 = !kv_is_turbo && new_mma_available(cc) && gqa_opt_applies && !(Q->ne[1] == 1 && n_swa > 0 && K->ne[0] == V->ne[0]);
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && K->ne[0] == V->ne[0] && Q->ne[0] % (2*WARP_SIZE) == 0;
     if (Q->ne[1] == 1 && can_use_vector_kernel && !mma_faster_for_bs1 && !ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
         ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
@@ -143,7 +148,8 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     }
 
     // As mentioned above, the new-new MMA is slower then the new MMA.
-    ggml_cuda_flash_attn_ext_mma_f16(ctx, dst);
+    if (!kv_is_turbo) { ggml_cuda_flash_attn_ext_mma_f16(ctx, dst); return; }
+    ggml_cuda_flash_attn_ext_vec_f16(ctx, dst);
     //ggml_cuda_flash_attn_ext_mma_new(ctx, dst);
 }
 
