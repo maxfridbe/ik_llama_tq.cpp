@@ -659,10 +659,8 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
             float * tmp_f32 = nullptr;
             CUDA_CHECK(cudaMallocAsync(&tmp_f32, n_elem * sizeof(float), main_stream));
             // Convert f16→f32 using element-wise cast
-            ggml_cuda_cpy_flt_cuda<half, float>(src0_ddc, (char *)tmp_f32, ne, ne00, ne01, ne02,
-                nb00, nb01, nb02, nb03, ne00, ne01, ne02,
-                sizeof(float), ne00*sizeof(float), ne00*ne01*sizeof(float), ne00*ne01*ne02*sizeof(float),
-                main_stream, nullptr, 0);
+            // f16 → f32 conversion for turbo
+            ggml_cpy_flt_cuda<half, float>(src0_ddc, (char *)tmp_f32, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne00, ne01, ne02, sizeof(float), (int64_t)ne00*sizeof(float), (int64_t)ne00*ne01*sizeof(float), (int64_t)ne00*ne01*ne02*sizeof(float), main_stream, nullptr, 0);
             // Build a temporary f32 tensor wrapper for turbo quantize
             ggml_tensor tmp_src = *src0;
             tmp_src.type = GGML_TYPE_F32;
