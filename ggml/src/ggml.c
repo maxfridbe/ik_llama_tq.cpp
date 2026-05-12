@@ -640,6 +640,11 @@ static void ggml_vec_dot_f32(int n, float * restrict s, size_t bs, const float *
 static void ggml_vec_dot_f16(int n, float * restrict s, size_t bs, ggml_fp16_t * restrict x, size_t bx, ggml_fp16_t * restrict y, size_t by, int nrc);
 static void ggml_vec_dot_bf16(int n, float * restrict s, size_t bs, ggml_bf16_t * restrict x, size_t bx, ggml_bf16_t * restrict y, size_t by, int nrc);
 
+// Forward declarations for TurboQuant CPU quantize functions
+static void quantize_row_turbo3_0_cpu(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
+static void quantize_row_turbo2_0_cpu(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
+static void quantize_row_turbo4_0_cpu(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
+
 static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
     [GGML_TYPE_I8] = {
         .type_name                = "i8",
@@ -1946,9 +1951,9 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
-    [GGML_TYPE_TURBO2_0] = { .type_name = "TURBO2_0", .blck_size = 128, .type_size = 34, .is_quantized = true, .to_float = NULL, .from_float = NULL, .from_float_ref = NULL, .vec_dot = NULL, .vec_dot_type = GGML_TYPE_F16, .nrows = 1 },
-    [GGML_TYPE_TURBO3_0] = { .type_name = "TURBO3_0", .blck_size = 128, .type_size = 50, .is_quantized = true, .to_float = NULL, .from_float = NULL, .from_float_ref = NULL, .vec_dot = NULL, .vec_dot_type = GGML_TYPE_F16, .nrows = 1 },
-    [GGML_TYPE_TURBO4_0] = { .type_name = "TURBO4_0", .blck_size = 128, .type_size = 68, .is_quantized = true, .to_float = NULL, .from_float = NULL, .from_float_ref = NULL, .vec_dot = NULL, .vec_dot_type = GGML_TYPE_F16, .nrows = 1 },
+    [GGML_TYPE_TURBO2_0] = { .type_name = "TURBO2_0", .blck_size = 128, .type_size = 34, .is_quantized = true, .to_float = NULL, .from_float = quantize_row_turbo2_0_cpu, .from_float_ref = NULL, .vec_dot = NULL, .vec_dot_type = GGML_TYPE_F16, .nrows = 1 },
+    [GGML_TYPE_TURBO3_0] = { .type_name = "TURBO3_0", .blck_size = 128, .type_size = 50, .is_quantized = true, .to_float = NULL, .from_float = quantize_row_turbo3_0_cpu, .from_float_ref = NULL, .vec_dot = NULL, .vec_dot_type = GGML_TYPE_F16, .nrows = 1 },
+    [GGML_TYPE_TURBO4_0] = { .type_name = "TURBO4_0", .blck_size = 128, .type_size = 68, .is_quantized = true, .to_float = NULL, .from_float = quantize_row_turbo4_0_cpu, .from_float_ref = NULL, .vec_dot = NULL, .vec_dot_type = GGML_TYPE_F16, .nrows = 1 },
     [GGML_TYPE_TQ3_1S]   = { .type_name = "TQ3_1S",   .blck_size = 32,  .type_size = 20, .is_quantized = true, .to_float = NULL, .from_float = NULL, .from_float_ref = NULL, .vec_dot = NULL, .vec_dot_type = GGML_TYPE_F16, .nrows = 1 },
     [GGML_TYPE_TQ4_1S]   = { .type_name = "TQ4_1S",   .blck_size = 32,  .type_size = 24, .is_quantized = true, .to_float = NULL, .from_float = NULL, .from_float_ref = NULL, .vec_dot = NULL, .vec_dot_type = GGML_TYPE_F16, .nrows = 1 },
 };
@@ -24712,6 +24717,90 @@ struct ggml_tensor * ggml_turbo_wht(
     memcpy(result->op_params + 0, &direction, sizeof(int));
     memcpy(result->op_params + sizeof(int), &group_size, sizeof(int));
     return result;
+}
+
+
+// TurboQuant CPU quantize stubs — used by CPU fallback path (e.g. warmup).
+// No WHT rotation; GPU path (set_rows_cuda_turbo*) provides the proper WHT version.
+static void quantize_row_turbo3_0_cpu(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    const int nb = (int)(k / QK_TURBO3);
+    block_turbo3_0 * y = (block_turbo3_0 *) vy;
+    for (int i = 0; i < nb; i++) {
+        const float * xb = x + i * QK_TURBO3;
+        block_turbo3_0 * yb = y + i;
+        float sum_sq = 0.0f;
+        for (int j = 0; j < QK_TURBO3; j++) sum_sq += xb[j] * xb[j];
+        const float norm = sum_sq > 1e-20f ? sqrtf(sum_sq) : 1.0f;
+        float inv_norm = 1.0f / norm;
+        yb->norm = GGML_FP32_TO_FP16(norm);
+        memset(yb->qs,    0, sizeof(yb->qs));
+        memset(yb->signs, 0, sizeof(yb->signs));
+        for (int j = 0; j < QK_TURBO3; j++) {
+            float v = xb[j] * inv_norm;
+            // 3-bit centroid nearest: 8 centroids, simple threshold
+            float best = fabsf(v - TURBO_CENTROIDS_3BIT_CPU[0]);
+            int   idx  = 0;
+            for (int c = 1; c < 8; c++) {
+                float d = fabsf(v - TURBO_CENTROIDS_3BIT_CPU[c]);
+                if (d < best) { best = d; idx = c; }
+            }
+            int lo2 = idx & 3;
+            int hi1 = (idx >> 2) & 1;
+            yb->qs[j/4]    |= (uint8_t)(lo2 << (2*(j%4)));
+            yb->signs[j/8] |= (uint8_t)(hi1 << (j%8));
+        }
+    }
+}
+
+static void quantize_row_turbo2_0_cpu(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    const int nb = (int)(k / QK_TURBO2);
+    block_turbo2_0 * y = (block_turbo2_0 *) vy;
+    for (int i = 0; i < nb; i++) {
+        const float * xb = x + i * QK_TURBO2;
+        block_turbo2_0 * yb = y + i;
+        float sum_sq = 0.0f;
+        for (int j = 0; j < QK_TURBO2; j++) sum_sq += xb[j] * xb[j];
+        const float norm = sum_sq > 1e-20f ? sqrtf(sum_sq) : 1.0f;
+        yb->norm = GGML_FP32_TO_FP16(norm);
+        memset(yb->qs, 0, sizeof(yb->qs));
+        float inv_norm = 1.0f / norm;
+        for (int j = 0; j < QK_TURBO2; j++) {
+            float v = xb[j] * inv_norm;
+            float best = fabsf(v - TURBO_CENTROIDS_2BIT_CPU[0]);
+            int   idx  = 0;
+            for (int c = 1; c < 4; c++) {
+                float d = fabsf(v - TURBO_CENTROIDS_2BIT_CPU[c]);
+                if (d < best) { best = d; idx = c; }
+            }
+            yb->qs[j/4] |= (uint8_t)(idx << (2*(j%4)));
+        }
+    }
+}
+
+static void quantize_row_turbo4_0_cpu(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    const int nb = (int)(k / QK_TURBO4);
+    block_turbo4_0 * y = (block_turbo4_0 *) vy;
+    for (int i = 0; i < nb; i++) {
+        const float * xb = x + i * QK_TURBO4;
+        block_turbo4_0 * yb = y + i;
+        float sum_sq = 0.0f;
+        for (int j = 0; j < QK_TURBO4; j++) sum_sq += xb[j] * xb[j];
+        const float norm = sum_sq > 1e-20f ? sqrtf(sum_sq) : 1.0f;
+        yb->norm = GGML_FP32_TO_FP16(norm);
+        memset(yb->qs, 0, sizeof(yb->qs));
+        float inv_norm = 1.0f / norm;
+        for (int j = 0; j < QK_TURBO4; j++) {
+            float v = xb[j] * inv_norm;
+            float best = fabsf(v - TURBO_CENTROIDS_4BIT_CPU[0]);
+            int   idx  = 0;
+            for (int c = 1; c < 16; c++) {
+                float d = fabsf(v - TURBO_CENTROIDS_4BIT_CPU[c]);
+                if (d < best) { best = d; idx = c; }
+            }
+            if (j % 2 == 0) yb->qs[j/2]  = (uint8_t)(idx & 0xF);
+            else             yb->qs[j/2] |= (uint8_t)((idx & 0xF) << 4);
+        }
+    }
 }
 
 struct ggml_hash_set ggml_hash_set_new(size_t size) {

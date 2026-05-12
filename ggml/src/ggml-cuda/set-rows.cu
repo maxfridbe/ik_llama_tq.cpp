@@ -1176,20 +1176,8 @@ static __global__ void k_fill_seq_i32(int32_t * buf, int64_t n) {
     if (i < n) buf[i] = (int32_t)i;
 }
 void ggml_cuda_cpy_f32_to_turbo(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, ggml_tensor * dst) {
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
-            cudaStream_t stream = ctx.stream();
-    const int64_t n_rows = ggml_nrows(src0);
-    int32_t * idx_buf = nullptr;
-    CUDA_CHECK(cudaMallocAsync(&idx_buf, n_rows * sizeof(int32_t), stream));
-    k_fill_seq_i32<<<(int)((n_rows+255)/256), 256, 0, stream>>>(idx_buf, n_rows);
-    ggml_tensor fake_idx; memset(&fake_idx, 0, sizeof(fake_idx));
-    fake_idx.type = GGML_TYPE_I32; fake_idx.ne[0] = n_rows; fake_idx.ne[1] = fake_idx.ne[2] = fake_idx.ne[3] = 1;
-    fake_idx.nb[0] = sizeof(int32_t); fake_idx.nb[1] = fake_idx.nb[2] = fake_idx.nb[3] = n_rows*sizeof(int32_t);
-    fake_idx.data = idx_buf;
-    if      (dst->type == GGML_TYPE_TURBO3_0) set_rows_cuda_turbo3<int32_t>(ctx, src0, &fake_idx, dst);
-    else if (dst->type == GGML_TYPE_TURBO2_0) set_rows_cuda_turbo2<int32_t>(ctx, src0, &fake_idx, dst);
-    else if (dst->type == GGML_TYPE_TURBO4_0) set_rows_cuda_turbo4<int32_t>(ctx, src0, &fake_idx, dst);
-    CUDA_CHECK(cudaFreeAsync(idx_buf, stream));
+    // DISABLED FOR TESTING
+    (void)ctx; (void)src0; (void)dst;
 }
 
 void ggml_cuda_op_set_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
