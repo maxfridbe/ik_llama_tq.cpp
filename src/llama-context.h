@@ -93,7 +93,8 @@ struct llama_kv_cache {
         // Per-step conv feature buffer: stores qkv_mixed features from the
         // verification forward pass so conv state can be reconstructed at any step.
         // One tensor per recurrent layer, each sized [conv_dim * max_tokens].
-        std::vector<std::vector<ggml_tensor *>> per_step_qkv;
+        //std::vector<std::vector<ggml_tensor *>> per_step_qkv;
+        std::vector<std::vector<ggml_tensor *>> per_step_conv;
 
         int32_t per_step_n_tokens = 0;
         int32_t per_step_max_allocated = 0;
@@ -103,6 +104,8 @@ struct llama_kv_cache {
         int32_t per_step_d_conv = 0;
 
         int selected_spec_mode = -1;
+        int fixed_spec_mode = LLAMA_SPEC_CKPT_NONE;
+        int32_t fixed_max_tokens = 0;
 
         // Serialised sequence state for CPU mode
         std::vector<uint8_t> cpu_state_data;
@@ -115,6 +118,7 @@ struct llama_kv_cache {
         std::vector<ggml_backend_buffer_t>   shadow_bufs;
 
         bool allocated = false;
+        bool shadow_conv_only = false;
         bool saved     = false;
 
         ~gpu_checkpoint() {
@@ -135,7 +139,7 @@ struct llama_kv_cache {
 
     gpu_checkpoint ckpt;
 
-    bool checkpoint_alloc_shadows();
+    bool checkpoint_alloc_shadows(bool conv_only_shadow = false);
     bool checkpoint_supported() const;
     bool checkpoint_save(ggml_backend_sched_t sched);
     bool checkpoint_restore(ggml_backend_sched_t sched);

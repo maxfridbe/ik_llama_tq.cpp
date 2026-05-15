@@ -1610,6 +1610,12 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    GGML_API struct ggml_tensor * ggml_mul_mat_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * result);
+
     // change the precision of a matrix multiplication
     // set to GGML_PREC_F32 for higher precision (useful for phi-2)
     GGML_API void ggml_mul_mat_set_prec(
@@ -1844,6 +1850,16 @@ extern "C" {
             int64_t               ne1,
             int64_t               ne2,
             int64_t               ne3);
+
+    GGML_API struct ggml_tensor * ggml_reshape_4d_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            enum ggml_type        type,
+            int64_t               ne0,
+            int64_t               ne1,
+            int64_t               ne2,
+            int64_t               ne3);
+
 
     // offset in bytes
     GGML_API struct ggml_tensor * ggml_view_1d(
@@ -2462,7 +2478,8 @@ extern "C" {
             struct ggml_tensor  * s,
             struct ggml_tensor  * x,
             struct ggml_tensor  * c,
-            struct ggml_tensor  * sq);
+            struct ggml_tensor  * sq,
+            struct ggml_tensor  * saved_steps);
 
     GGML_API struct ggml_tensor * ggml_ssm_scan(
             struct ggml_context * ctx,
