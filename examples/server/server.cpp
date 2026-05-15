@@ -2157,20 +2157,15 @@ int main(int argc, char ** argv) {
 #endif
 
 
-    // Idle sleep: unload model from GPU after N seconds of inactivity
+
+    // Idle sleep: exit process after N idle seconds.
+    // systemd Restart=always reloads the model on next start.
     ctx_server.queue_tasks.sleep_idle_seconds = params.sleep_idle_seconds;
     if (params.sleep_idle_seconds > 0) {
-        ctx_server.queue_tasks.on_sleeping_state([&ctx_server, &params](bool entering) {
+        ctx_server.queue_tasks.on_sleeping_state([](bool entering) {
             if (entering) {
-                LOG_INFO("idle sleep: freeing GPU memory", {});
-                ctx_server.unload();
-            } else {
-                LOG_INFO("idle sleep: reloading model", {});
-                if (!ctx_server.load_model(params)) {
-                    LOG_ERROR("idle sleep: failed to reload model", {});
-                    return;
-                }
-                ctx_server.init();
+                LOG_INFO("idle sleep: exiting to free GPU memory", {});
+                exit(0);
             }
         });
     }
