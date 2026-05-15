@@ -1064,6 +1064,21 @@ int main(int argc, char ** argv) {
             // use shared_ptr as it's shared between the chunked_content_provider() and on_complete()
             const auto rd = std::make_shared<server_response_reader>(ctx_server);
 
+            // If sleeping (model unloaded), wait for reload before processing.
+            // Post a noop metrics task to trigger the wakeup in the queue thread,
+            // then block here until ctx is valid again.
+            if (ctx_server.queue_tasks.sleeping) {
+                server_task wake_task;
+                wake_task.id   = ctx_server.queue_tasks.get_new_id();
+                wake_task.type = SERVER_TASK_TYPE_METRICS;
+                wake_task.id_target = -1;
+                ctx_server.queue_results.add_waiting_task_id(wake_task.id);
+                ctx_server.queue_tasks.post(std::move(wake_task));
+                // Block until the queue thread processes the task (after reload).
+                ctx_server.queue_results.recv(wake_task.id);
+                ctx_server.queue_results.remove_waiting_task_id(wake_task.id);
+            }
+
             try {
                 std::vector<server_task> tasks;
 
@@ -2158,14 +2173,21 @@ int main(int argc, char ** argv) {
 
 
 
-    // Idle sleep: exit process after N idle seconds.
-    // systemd Restart=always reloads the model on next start.
+
+    // Idle sleep: in-process unload + reload.
     ctx_server.queue_tasks.sleep_idle_seconds = params.sleep_idle_seconds;
     if (params.sleep_idle_seconds > 0) {
-        ctx_server.queue_tasks.on_sleeping_state([](bool entering) {
+        ctx_server.queue_tasks.on_sleeping_state([&ctx_server, &params](bool entering) {
             if (entering) {
-                LOG_INFO("idle sleep: exiting to free GPU memory", {});
-                exit(0);
+                LOG_INFO("idle sleep: freeing GPU memory", {});
+                ctx_server.unload();
+            } else {
+                LOG_INFO("idle sleep: reloading model", {});
+                if (!ctx_server.load_model(params)) {
+                    LOG_ERROR("idle sleep: reload failed", {});
+                    return;
+                }
+                ctx_server.init();
             }
         });
     }

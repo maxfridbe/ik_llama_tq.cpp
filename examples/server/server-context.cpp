@@ -231,21 +231,30 @@ static bool save_speculative_checkpoint(server_slot & slot, llama_model * model,
 
 
 void server_context::unload() {
-    // Free GPU resources for idle sleep — mirrors destructor but keeps the object alive.
-    // Synchronize first so no CUDA ops are in-flight when we free.
-    if (ctx)       { llama_synchronize(ctx);       llama_free(ctx);        ctx       = nullptr; }
-    if (ctx_draft) { llama_synchronize(ctx_draft); llama_free(ctx_draft);  ctx_draft = nullptr; }
-    if (model) { llama_free_model(model); model = nullptr; }
-    mtmd_free(mctx); mctx = nullptr;
-    if (model_draft) { llama_free_model(model_draft); model_draft = nullptr; }
+    // Free in correct dependency order so no use-after-free:
+    // common_speculative_free frees ctx_mtp which holds a model ref;
+    // ctx_mtp must be freed BEFORE llama_free_model(model).
+
+    // 1. Slot resources: sampling, speculative (ctx_mtp), batch_spec
     for (server_slot& slot : slots) {
         if (slot.ctx_sampling) { common_sampler_free(slot.ctx_sampling); slot.ctx_sampling = nullptr; }
         slot.spec_ckpt.clear();
+        common_speculative_free(slot.spec);  // frees ctx_mtp
         if (slot.ctx_dft) { llama_free(slot.ctx_dft); slot.ctx_dft = nullptr; }
-        common_speculative_free(slot.spec);
         llama_batch_free(slot.batch_spec);
     }
-    slots.clear();
+    // Do NOT clear slots here; they stay alive so HTTP handlers can post tasks
+    // and trigger wakeup while sleeping. init() will reset them on reload.
+
+    // 2. Contexts (sync CUDA first, then free; both hold model refs)
+    if (ctx)       { llama_synchronize(ctx);       llama_free(ctx);        ctx       = nullptr; }
+    if (ctx_draft) { llama_synchronize(ctx_draft); llama_free(ctx_draft);  ctx_draft = nullptr; }
+
+    // 3. Models (all contexts freed above)
+    if (model)       { llama_free_model(model);       model       = nullptr; }
+    if (model_draft) { llama_free_model(model_draft); model_draft = nullptr; }
+    mtmd_free(mctx); mctx = nullptr;
+
     llama_batch_free(batch);
 }
 
@@ -393,6 +402,7 @@ bool server_context::load_model(const gpt_params& params_) {
 }
 
 void server_context::init() {
+    slots.clear();  // reset from previous load
     const int32_t n_ctx_slot = n_ctx / params_base.n_parallel;
 
     LOG_INFO("initializing slots", { {"n_slots", params_base.n_parallel} });
