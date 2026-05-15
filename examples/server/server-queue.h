@@ -31,6 +31,11 @@ struct server_queue {
     std::function<void(server_task &&)> callback_new_task;
     std::function<void(server_task_multi &)> callback_finish_multitask;
     std::function<void(void)>                callback_update_slots;
+    std::function<void(bool)>                callback_sleeping_state; // true=entering sleep, false=waking
+
+    // idle sleep state
+    bool    sleeping           = false;
+    int32_t sleep_idle_seconds = -1;
 
 
     // Add a new task to the end of the queue
@@ -57,6 +62,11 @@ struct server_queue {
     // Register the function to be called when all slots data is ready to be processed
     void on_update_slots(std::function<void(void)> callback) {
         callback_update_slots = std::move(callback);
+    }
+
+    // Register function called when entering/exiting idle sleep (true=sleep, false=wake)
+    void on_sleeping_state(std::function<void(bool)> callback) {
+        callback_sleeping_state = std::move(callback);
     }
 
     // Call when the state of one slot is changed

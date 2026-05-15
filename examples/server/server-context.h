@@ -301,6 +301,7 @@ struct server_context {
     float cache_ram_similarity = 0.5f;
 
     ~server_context();
+    void unload();  // free GPU memory without destroying object (for idle sleep)
 
     bool load_model(const gpt_params& params_);
 

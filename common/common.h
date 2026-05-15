@@ -422,6 +422,7 @@ struct gpt_params {
     int32_t timeout_read   = 600;          // http read timeout in seconds
     int32_t timeout_write  = timeout_read; // http write timeout in seconds
     int32_t n_threads_http = -1;           // number of threads to process HTTP requests
+    int32_t sleep_idle_seconds = -1;       // if >0, unload model from GPU after N idle seconds
     bool    send_done      = false;        // send done message as required for OAI compatibility
 
     std::string hostname      = "127.0.0.1";

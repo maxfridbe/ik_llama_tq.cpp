@@ -229,6 +229,25 @@ static bool save_speculative_checkpoint(server_slot & slot, llama_model * model,
     return true;
 }
 
+
+void server_context::unload() {
+    // Free GPU resources for idle sleep — mirrors destructor but keeps the object alive.
+    if (ctx)   { llama_free(ctx);        ctx   = nullptr; }
+    if (model) { llama_free_model(model); model = nullptr; }
+    mtmd_free(mctx); mctx = nullptr;
+    if (ctx_draft)   { llama_free(ctx_draft);        ctx_draft   = nullptr; }
+    if (model_draft) { llama_free_model(model_draft); model_draft = nullptr; }
+    for (server_slot& slot : slots) {
+        if (slot.ctx_sampling) { common_sampler_free(slot.ctx_sampling); slot.ctx_sampling = nullptr; }
+        slot.spec_ckpt.clear();
+        if (slot.ctx_dft) { llama_free(slot.ctx_dft); slot.ctx_dft = nullptr; }
+        common_speculative_free(slot.spec);
+        llama_batch_free(slot.batch_spec);
+    }
+    slots.clear();
+    llama_batch_free(batch);
+}
+
 server_context::~server_context() {
     if (ctx) {
         llama_free(ctx);

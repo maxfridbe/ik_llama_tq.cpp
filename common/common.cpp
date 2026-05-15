@@ -2034,6 +2034,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.n_threads_http = std::stoi(argv[i]);
         return true;
     }
+    if (arg == "--sleep-idle-seconds") {
+        CHECK_ARG
+        params.sleep_idle_seconds = std::stoi(argv[i]);
+        return true;
+    }
     if (arg == "-spf" || arg == "--system-prompt-file") {
         CHECK_ARG
         std::ifstream file(argv[i]);

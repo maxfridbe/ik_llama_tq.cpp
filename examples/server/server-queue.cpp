@@ -1,4 +1,5 @@
 #include "server-task.h"
+#include <chrono>
 #include "server-queue.h"
 #include "server-common.h"
 
@@ -106,6 +107,11 @@ void server_queue::start_loop() {
             server_task task = std::move(queue_tasks.front());
             queue_tasks.pop_front();
             lock.unlock();
+            if (sleeping) {
+                LOG_INFO("waking from idle sleep to serve request", {});
+                sleeping = false;
+                if (callback_sleeping_state) { callback_sleeping_state(false); }
+            }
             //LOG_VERBOSE("callback_new_task", { {"id_task", task.id} });
             callback_new_task(std::move(task));
         }
@@ -140,9 +146,27 @@ void server_queue::start_loop() {
                     LOG_VERBOSE("ending start_loop", {});
                     return;
                 }
-                condition_tasks.wait(lock, [&] {
-                    return (!queue_tasks.empty() || !running);
+                if (sleep_idle_seconds > 0 && !sleeping) {
+                    // Wait with idle timeout; if it fires, unload model from GPU
+                    bool got_task = condition_tasks.wait_for(lock,
+                        std::chrono::seconds(sleep_idle_seconds),
+                        [&] { return (!queue_tasks.empty() || !running); });
+                    if (!got_task && running && queue_tasks.empty()) {
+                        LOG_INFO("idle timeout: unloading model from GPU", {});
+                        lock.unlock();
+                        sleeping = true;
+                        if (callback_sleeping_state) { callback_sleeping_state(true); }
+                        lock.lock();
+                        // Block until a new request wakes us
+                        condition_tasks.wait(lock, [&] {
+                            return (!queue_tasks.empty() || !running);
+                        });
+                    }
+                } else {
+                    condition_tasks.wait(lock, [&] {
+                        return (!queue_tasks.empty() || !running);
                     });
+                }
             }
         }
     }
