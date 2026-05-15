@@ -353,36 +353,7 @@ static __global__ void k_set_rows_turbo3(
     x[j] *= inv_norm;
     __syncthreads();
 
-    // ---- Step 4: Forward WHT (signs1 → butterfly → signs2, normalized) ----
-    if (GROUP_SIZE == 128) {
-        x[j] *= TURBO_WHT_SIGNS1[j];
-    } else {
-        x[j] *= TURBO_WHT_SIGNS1_64[j];
-    }
-    __syncthreads();
-
-#define WHT_STAGE_SHARED(h) \
-    if (j % (2*(h)) < (h)) { float a = x[j], b = x[j+(h)]; x[j] = a+b; x[j+(h)] = a-b; } \
-    __syncthreads();
-
-    // Butterfly stages: loop from h=1 to h<GROUP_SIZE, doubling each time
-    WHT_STAGE_SHARED(1)
-    WHT_STAGE_SHARED(2)
-    WHT_STAGE_SHARED(4)
-    WHT_STAGE_SHARED(8)
-    WHT_STAGE_SHARED(16)
-    WHT_STAGE_SHARED(32)
-    if (GROUP_SIZE == 128) { WHT_STAGE_SHARED(64) }
-#undef WHT_STAGE_SHARED
-
-    constexpr float inv_sqrt_group = (GROUP_SIZE == 128) ? 0.08838834764831845f : 0.125f;
-    if (GROUP_SIZE == 128) {
-        x[j] = x[j] * inv_sqrt_group * TURBO_WHT_SIGNS2[j];
-    } else {
-        x[j] = x[j] * inv_sqrt_group * TURBO_WHT_SIGNS2_64[j];
-    }
-    __syncthreads();
-
+    // ---- Step 4: WHT disabled (ik_llama.cpp: Q is not WHT-rotated) ----
     // ---- Step 5: Quantize element j ----
     const float rv = x[j];
     const uint8_t idx = turbo_nearest_centroid_3bit(rv);
@@ -722,35 +693,7 @@ static __global__ void k_set_rows_turbo2(
     x[j] *= inv_norm;
     __syncthreads();
 
-    // ---- Step 4: Forward WHT ----
-    if (GROUP_SIZE == 128) {
-        x[j] *= TURBO_WHT_SIGNS1[j];
-    } else {
-        x[j] *= TURBO_WHT_SIGNS1_64[j];
-    }
-    __syncthreads();
-
-#define WHT_STAGE_SHARED_T2(h) \
-    if (j % (2*(h)) < (h)) { float a = x[j], b = x[j+(h)]; x[j] = a+b; x[j+(h)] = a-b; } \
-    __syncthreads();
-
-    WHT_STAGE_SHARED_T2(1)
-    WHT_STAGE_SHARED_T2(2)
-    WHT_STAGE_SHARED_T2(4)
-    WHT_STAGE_SHARED_T2(8)
-    WHT_STAGE_SHARED_T2(16)
-    WHT_STAGE_SHARED_T2(32)
-    if (GROUP_SIZE == 128) { WHT_STAGE_SHARED_T2(64) }
-#undef WHT_STAGE_SHARED_T2
-
-    constexpr float inv_sqrt_group = (GROUP_SIZE == 128) ? 0.08838834764831845f : 0.125f;
-    if (GROUP_SIZE == 128) {
-        x[j] = x[j] * inv_sqrt_group * TURBO_WHT_SIGNS2[j];
-    } else {
-        x[j] = x[j] * inv_sqrt_group * TURBO_WHT_SIGNS2_64[j];
-    }
-    __syncthreads();
-
+    // ---- Step 4: WHT disabled (ik_llama.cpp: Q is not WHT-rotated) ----
     // ---- Step 5: Quantize element j to 2-bit centroid ----
     const float rv = x[j];
     const uint8_t idx = turbo_nearest_centroid_2bit(rv);
@@ -1176,10 +1119,51 @@ static __global__ void k_fill_seq_i32(int32_t * buf, int64_t n) {
     if (i < n) buf[i] = (int32_t)i;
 }
 void ggml_cuda_cpy_f32_to_turbo(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, ggml_tensor * dst) {
-    // DISABLED FOR TESTING
-    (void)ctx; (void)src0; (void)dst;
-}
+    // Flatten src0 to 2D [ne0, n_rows] and use sequential indices so dst_row=i01.
+    // This ensures the flat row order (head*token interleaved) matches the 2D
+    // KV cache view layout, avoiding wrong stride-per-token writes.
+    const int64_t ne00   = src0->ne[0];
+    const int64_t n_rows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    if (n_rows == 0) return;
 
+    // Per-device sequential index buffer
+    static int32_t * d_seq[GGML_CUDA_MAX_DEVICES] = {};
+    static int64_t   d_cap[GGML_CUDA_MAX_DEVICES] = {};
+    const int dev = ctx.device;
+    if (n_rows > d_cap[dev]) {
+        if (d_seq[dev]) CUDA_CHECK(cudaFree(d_seq[dev]));
+        CUDA_CHECK(cudaMalloc(&d_seq[dev], n_rows * sizeof(int32_t)));
+        d_cap[dev] = n_rows;
+    }
+    k_fill_seq_i32<<<(int)((n_rows+255)/256), 256, 0, ctx.stream()>>>(d_seq[dev], n_rows);
+
+    // Flatten src0 to 2D: ne[1]=n_rows (all heads*tokens flat), ne[2]=1
+    // nb[1] = ne00*sizeof(float) so rows are consecutive in memory
+    ggml_tensor flat_src = *src0;
+    flat_src.ne[1] = n_rows;  flat_src.ne[2] = 1;  flat_src.ne[3] = 1;
+    flat_src.nb[1] = ne00 * sizeof(float);
+    flat_src.nb[2] = ne00 * n_rows * sizeof(float);
+    flat_src.nb[3] = ne00 * n_rows * sizeof(float);
+
+    // Sequential index tensor: flat_row i → dst row i (identity)
+    ggml_tensor si = {};
+    si.type  = GGML_TYPE_I32;
+    si.data  = d_seq[dev];
+    si.ne[0] = 1;  si.ne[1] = n_rows;  si.ne[2] = 1;  si.ne[3] = 1;
+    si.nb[0] = sizeof(int32_t);  // s10=1
+    si.nb[1] = 0;  si.nb[2] = 0;  si.nb[3] = 0;  // s11=s12=s13=0
+
+    // Fix: dst may be 1D (V cache) where nb[1]=total_bytes not row_stride.
+    // Override the dst view to have correct nb[1]=row_size and nb[2..3]=0.
+    const int64_t blck = (int64_t)ggml_blck_size(dst->type);
+    const int64_t row_bytes = (int64_t)ggml_type_size(dst->type) * ne00 / blck;
+    ggml_tensor dst_view = *dst;
+    dst_view.nb[1] = row_bytes;
+    dst_view.nb[2] = row_bytes * n_rows;
+    dst_view.nb[3] = row_bytes * n_rows;
+
+    set_rows_cuda<float, int32_t>(ctx, &flat_src, &si, &dst_view);
+}
 void ggml_cuda_op_set_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];

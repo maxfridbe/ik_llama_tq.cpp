@@ -606,12 +606,13 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_turbo3(
     const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
     const block_turbo3_0 * K_t = (const block_turbo3_0 *) K_c;
     GGML_UNUSED(Q_q8); GGML_UNUSED(Q_ds_v);
-    const float2 * Q_f2 = (const float2 *) Q_v;
+    const half2 * Q_h2 = (const half2 *) Q_v;
     float sum = 0.0f;
-    // Each WARP_SIZE threads cover Dk/2 float2 slots; we iterate in groups of WARP_SIZE
+    // Each WARP_SIZE threads cover Dk/2 half2 slots; we iterate in groups of WARP_SIZE
     for (int k_KQ_0 = 0; k_KQ_0 < Dk/2; k_KQ_0 += WARP_SIZE) {
         const int k_KQ = k_KQ_0 + threadIdx.x;
-        const float2 q = Q_f2[k_KQ_0/WARP_SIZE];
+        const half2 qh = Q_h2[k_KQ_0/WARP_SIZE];
+        const float2 q = make_float2(__low2float(qh), __high2float(qh));
         const int d0 = 2*k_KQ;
         const int ib  = d0 / QK_TURBO3;
         const int jj  = d0 % QK_TURBO3;
@@ -619,8 +620,9 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_turbo3(
         const uint8_t qs  = K_t[ib].qs[jj/4];
         const uint8_t sgn = K_t[ib].signs[jj/8];
         const int s0 = jj & 7;
-        const int idx0 = ((qs>>0)&3) | (((sgn>>(s0  ))&1)<<2);
-        const int idx1 = ((qs>>2)&3) | (((sgn>>(s0+1))&1)<<2);
+        const int qshift = 2 * (jj % 4);
+        const int idx0 = ((qs >> qshift) & 3) | (((sgn>>(s0  ))&1)<<2);
+        const int idx1 = ((qs >> (qshift+2)) & 3) | (((sgn>>(s0+1))&1)<<2);
         sum += (TURBO_CENTROIDS_3BIT[idx0]*q.x + TURBO_CENTROIDS_3BIT[idx1]*q.y) * norm;
     }
     return (T)sum;
@@ -632,18 +634,20 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_turbo2(
     const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
     const block_turbo2_0 * K_t = (const block_turbo2_0 *) K_c;
     GGML_UNUSED(Q_q8); GGML_UNUSED(Q_ds_v);
-    const float2 * Q_f2 = (const float2 *) Q_v;
+    const half2 * Q_h2 = (const half2 *) Q_v;
     float sum = 0.0f;
     for (int k_KQ_0 = 0; k_KQ_0 < Dk/2; k_KQ_0 += WARP_SIZE) {
         const int k_KQ = k_KQ_0 + threadIdx.x;
-        const float2 q = Q_f2[k_KQ_0/WARP_SIZE];
+        const half2 qh = Q_h2[k_KQ_0/WARP_SIZE];
+        const float2 q = make_float2(__low2float(qh), __high2float(qh));
         const int d0 = 2*k_KQ;
         const int ib = d0 / QK_TURBO2;
         const int jj = d0 % QK_TURBO2;
         const float norm = __half2float(K_t[ib].norm);
         const uint8_t qs = K_t[ib].qs[jj/4];
-        const int idx0 = (qs>>0)&3;
-        const int idx1 = (qs>>2)&3;
+        const int qshift = 2 * (jj % 4);
+        const int idx0 = (qs >> qshift) & 3;
+        const int idx1 = (qs >> (qshift+2)) & 3;
         sum += (TURBO_CENTROIDS_2BIT[idx0]*q.x + TURBO_CENTROIDS_2BIT[idx1]*q.y) * norm;
     }
     return (T)sum;
@@ -655,11 +659,12 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_turbo4(
     const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
     const block_turbo4_0 * K_t = (const block_turbo4_0 *) K_c;
     GGML_UNUSED(Q_q8); GGML_UNUSED(Q_ds_v);
-    const float2 * Q_f2 = (const float2 *) Q_v;
+    const half2 * Q_h2 = (const half2 *) Q_v;
     float sum = 0.0f;
     for (int k_KQ_0 = 0; k_KQ_0 < Dk/2; k_KQ_0 += WARP_SIZE) {
         const int k_KQ = k_KQ_0 + threadIdx.x;
-        const float2 q = Q_f2[k_KQ_0/WARP_SIZE];
+        const half2 qh = Q_h2[k_KQ_0/WARP_SIZE];
+        const float2 q = make_float2(__low2float(qh), __high2float(qh));
         const int d0 = 2*k_KQ;
         const int ib = d0 / QK_TURBO4;
         const int jj = d0 % QK_TURBO4;

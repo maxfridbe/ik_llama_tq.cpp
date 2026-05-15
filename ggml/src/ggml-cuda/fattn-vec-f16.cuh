@@ -54,7 +54,11 @@ static __global__ void flash_attn_vec_ext_f16(
     //In this kernel Q, K, V are matrices while i, j, k are matrix indices.
 
     constexpr vec_dot_KQ_f16_t vec_dot_KQ = get_vec_dot_KQ_f16<Dk>(type_K);
-    constexpr bool Q_q8_1 = type_K != GGML_TYPE_F16;
+    // Turbo types use the f16 Q path (Q_h2 registers), not q8_1 quantized Q.
+    constexpr bool K_is_turbo = (type_K == GGML_TYPE_TURBO3_0 ||
+                                  type_K == GGML_TYPE_TURBO2_0 ||
+                                  type_K == GGML_TYPE_TURBO4_0);
+    constexpr bool Q_q8_1 = !K_is_turbo && (type_K != GGML_TYPE_F16);
     constexpr dequantize_1_f16_t dequantize_1_v = get_dequantize_1_f16(type_V);
 
     const int ic0 = blockIdx.x * ncols; // Index of the Q/QKV column to work on.
@@ -505,6 +509,8 @@ extern DECL_FATTN_VEC_F16_CASE(128, GGML_TYPE_F16,  GGML_TYPE_F16);
 
 extern DECL_FATTN_VEC_F16_CASE(256, GGML_TYPE_F16,  GGML_TYPE_F16);
 extern DECL_FATTN_VEC_F16_CASE(256, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0);
+extern DECL_FATTN_VEC_F16_CASE(256, GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO3_0);
+extern DECL_FATTN_VEC_F16_CASE(128, GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO3_0);
 
 extern DECL_FATTN_VEC_F16_CASE_DKDV(192, 128, GGML_TYPE_F16, GGML_TYPE_F16);
 extern DECL_FATTN_VEC_F16_CASE_DKDV(192, 128, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0);
