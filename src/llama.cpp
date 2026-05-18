@@ -1612,7 +1612,7 @@ static void restore_recurrent_cache_tensors(int step, ggml_backend_sched_t sched
         size_t ssm_bytes, size_t conv_bytes,
         ggml_tensor * s_l, ggml_tensor * per_step_ssm, ggml_tensor * per_step_conv,
         std::unordered_set<ggml_backend_t> & backends_to_sync) {
-    auto dst_backend = ggml_backend_sched_get_tensor_backend(sched, s_l);
+    auto dst_backend = ggml_backend_sched_get_backend(sched, ggml_backend_sched_get_backend_idx(sched, s_l->buffer));
     auto dst = *s_l;
     dst.ne[0] = ssm_bytes/sizeof(float);
     dst.nb[1] = dst.nb[2] = dst.nb[3] = ssm_bytes + conv_bytes;
@@ -2129,6 +2129,91 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
     }
 
     vocab.print_info();
+
+}
+
+static void llm_requantize_output_tensor(llama_model & model, ggml_type new_type) {
+    if (new_type == GGML_TYPE_COUNT || !model.output) return;
+    if (model.output_mtp && model.output_mtp != model.output) {
+        LLAMA_LOG_WARN("%s: MTP output tensor is already present => not requantizing\n", __func__);
+        return;
+    }
+    if (model.output->type == new_type) {
+        LLAMA_LOG_WARN("%s: output tensor is already of type %s => not requantizing\n", __func__, ggml_type_name(new_type));
+    }
+    auto [other_type, n_interleaved] = interleaved_properties(new_type);
+    if (model.output->ne[1] % n_interleaved != 0) {
+        LLAMA_LOG_WARN("%s: number of rows %ld is not a multiple of %d row interleaving for %s\n", __func__,
+                model.output->ne[1], n_interleaved, ggml_type_name(new_type));
+        LLAMA_LOG_WARN("%s: using %s instead of %s\n", __func__, ggml_type_name(other_type), ggml_type_name(new_type));
+        new_type = other_type;
+        n_interleaved = 1;
+    }
+    auto nbytes_orig = ggml_nbytes(model.output);
+    auto row_size    = ggml_row_size(new_type, model.output->ne[0]);
+    auto nbytes_new  = row_size*ggml_nrows(model.output);
+    if (nbytes_new >= nbytes_orig) {
+        LLAMA_LOG_WARN("%s: if requantized to %s the output tensor size would be %zu, which is >= the current size %zu => not requantizing\n", __func__, ggml_type_name(new_type), nbytes_new, nbytes_orig);
+        return;
+    }
+
+    LLAMA_LOG_INFO("====== Creating extra output tensor of type %s for MTP usage. Additional memory required is %.2f MiB\n",
+            ggml_type_name(new_type), nbytes_new/1024./1024.);
+
+    bool is_host = ggml_backend_buffer_is_host(model.output->buffer);
+
+    auto tensor_data = model.output->data;
+    std::vector<char> tensor_data_buf;
+    if (!is_host) {
+        tensor_data_buf.resize(nbytes_orig);
+        ggml_backend_tensor_get(model.output, tensor_data_buf.data(), 0, nbytes_orig);
+        tensor_data = tensor_data_buf.data();
+    }
+
+    auto tt_new  = ggml_internal_get_type_traits(new_type);
+    auto new_output = std::make_unique<ggml_tensor>(*model.output);
+    new_output->type = new_type;
+    new_output->nb[0] = tt_new.type_size;
+    new_output->nb[1] = row_size;
+    new_output->nb[2] = new_output->nb[1] * new_output->ne[1];
+    new_output->nb[3] = new_output->nb[2] * new_output->ne[2];
+    GGML_ASSERT(ggml_nbytes(new_output.get()) == nbytes_new);
+    new_output->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_buffer_get_type(model.output->buffer), nbytes_new);
+    new_output->data   = ggml_backend_buffer_get_base(new_output->buffer);
+    new_output->op     = GGML_OP_NONE;
+    for (int j = 0; j < GGML_MAX_SRC; ++j) new_output->src[j] = nullptr;
+    ggml_set_name(new_output.get(), "output_extra.weight");
+    ggml_backend_buffer_set_usage(new_output->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    std::vector<char> new_data_buf;
+    char * new_data = (char *)new_output->data;
+    if (!is_host) {
+        new_data_buf.resize(nbytes_new);
+        new_data = new_data_buf.data();
+    }
+
+    int nthread = std::max<int>(1, std::thread::hardware_concurrency()/2);
+
+    auto compute = [t = model.output, tensor_data, new_data, nthread, new_type, n_interleaved] (int ith) {
+        std::vector<float> work(t->ne[0]*n_interleaved);
+        auto tt_orig = ggml_internal_get_type_traits(t->type);
+        auto tt_new  = ggml_internal_get_type_traits(new_type);
+        iqk_quantize_any(int(t->type), int(new_type),
+                t->ne[0], t->ne[1], t->ne[2], t->ne[3],
+                t->nb[0], t->nb[1], t->nb[2], t->nb[3],
+                tensor_data, new_data, work.data(), tt_orig.to_float, tt_new.from_float, ith, nthread);
+    };
+    std::vector<std::thread> workers(nthread-1);
+    for (int it = 0; it < nthread-1; ++it) workers[it] = std::thread(compute, it);
+    compute(nthread-1);
+    for (auto & w : workers) w.join();
+
+    if (!is_host) {
+        ggml_backend_tensor_set(new_output.get(), new_data, 0, nbytes_new);
+    }
+
+    model.output_mtp_ptr = std::move(new_output);
+    model.output_mtp     = model.output_mtp_ptr.get();
 
 }
 
@@ -2768,6 +2853,7 @@ static bool llm_load_tensors(
         const float * tensor_split,
         ggml_type cache_type_k,
         ggml_type cache_type_v,
+        ggml_type extra_output_type,
         uint32_t max_ctx_size,
         int n_seq_max,
         int n_ubatch,
@@ -3364,6 +3450,9 @@ static bool llm_load_tensors(
     if (model.arch == LLM_ARCH_GEMMA4) {
         llm_scale_gate_inp_s(model, use_mmap_buffer);
     }
+    if ((model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE) && extra_output_type != GGML_TYPE_COUNT) {
+        llm_requantize_output_tensor(model, extra_output_type);
+    }
 
     if (use_mmap_buffer) {
         for (auto & mapping : ml.mappings) {
@@ -3521,7 +3610,8 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         if (!llm_load_tensors(
             ml, model, params.n_gpu_layers, params.mla, params.split_mode, params.main_gpu, params.max_gpu, params.tensor_split,
-            params.type_k, params.type_v, params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.fit_margin,
+            params.type_k, params.type_v, params.extra_output_type,
+            params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.fit_margin,
             params.worst_graph_tokens, params.flash_attn,
             params.use_mlock, params.validate_quants, params.mtp, params.fit, params.dry_run,
             params.progress_callback, params.progress_callback_user_data
@@ -4676,8 +4766,10 @@ static int llama_decode_internal(
         }
         else {
             const bool has_mtp = llama_context_has_mtp_outputs(lctx);
-            const bool use_raw_mtp_embd = has_mtp && (lctx.model.arch == LLM_ARCH_QWEN35 ||
-                                                       lctx.model.arch == LLM_ARCH_QWEN35MOE || lctx.model.arch == LLM_ARCH_GEMMA4 || lctx.model.arch == LLM_ARCH_GEMMA4_MTP);
+            const bool use_raw_mtp_embd = has_mtp && (lctx.model.arch == LLM_ARCH_QWEN35    ||
+                                                      lctx.model.arch == LLM_ARCH_QWEN35MOE ||
+                                                      lctx.model.arch == LLM_ARCH_GEMMA4    ||
+                                                      lctx.model.arch == LLM_ARCH_GEMMA4_MTP);
             if (cparams.embeddings || has_mtp) {
                 for (int i = gf->n_nodes - 1; i >= 0; --i) {
                     if (use_raw_mtp_embd && strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
@@ -4691,6 +4783,7 @@ static int llama_decode_internal(
                     }
                     if (strcmp(gf->nodes[i]->name, "result_norm") == 0) {
                         embd = gf->nodes[i];
+                        break;
                     }
                 }
             }
@@ -5617,6 +5710,7 @@ struct llama_model_params llama_model_default_params() {
         /*.n_last_k                    =*/ -1,
         /*.n_first_v                   =*/ -1,
         /*.n_last_v                    =*/ -1,
+        /*.extra_output_type           =*/ GGML_TYPE_COUNT,
         /*.tensor_split                =*/ nullptr,
         /*.rpc_servers                 =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
@@ -5727,6 +5821,7 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.ffn_down_type               =*/ GGML_TYPE_COUNT,
         /*.ffn_up_type                 =*/ GGML_TYPE_COUNT,
         /*.ffn_gat_inp_type            =*/ GGML_TYPE_COUNT,
+        /*.extra_output_type           =*/ GGML_TYPE_COUNT,
         /*.allow_requantize            =*/ false,
         /*.quantize_output_tensor      =*/ true,
         /*.only_copy                   =*/ false,
@@ -5921,6 +6016,9 @@ void llama_free_model(struct llama_model * model) {
 }
 
 static void llama_repack_up_gate_exps(llama_context & lctx) {
+    if (lctx.cparams.mtp_op_type != MTP_OP_NONE) {
+        return;
+    }
     auto & model = lctx.model;
     bool needs_repack = false;
     for (auto & l : model.layers) {
